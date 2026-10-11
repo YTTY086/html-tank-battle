@@ -58,6 +58,8 @@
   .hud-item .icon { width: 16px; height: 16px; border-radius: 3px; display: inline-block; }
   .hud-item .lbl { color: var(--muted); font-size: 12px; }
   .hud-item .val { font-weight: 700; font-variant-numeric: tabular-nums; min-width: 20px; }
+  .heart { color: #3a4150; font-size: 15px; margin-right: 3px; }
+  .heart.on { color: #e23b3b; text-shadow: 0 0 6px rgba(226,59,59,0.5); }
   #stage {
     position: relative;
     background: #000;
@@ -153,7 +155,7 @@
 
   <div id="hud">
     <div class="hud-item"><span class="icon" style="background:#e6c34a"></span><span class="lbl">得分</span><span class="val" id="score">0</span></div>
-    <div class="hud-item"><span class="icon" style="background:#4aa3ff"></span><span class="lbl">生命</span><span class="val" id="lives">3</span></div>
+    <div class="hud-item"><span class="icon" style="background:#e23b3b"></span><span class="lbl">生命</span><span class="val" id="lives"></span></div>
     <div class="hud-item"><span class="icon" style="background:#c94a4a"></span><span class="lbl">敌军</span><span class="val" id="remaining">20</span></div>
     <div class="hud-item"><span class="lbl">关卡</span><span class="val" id="level">1</span></div>
   </div>
@@ -162,7 +164,7 @@
     <canvas id="game" width="416" height="416"></canvas>
     <div id="overlay">
       <div class="title" id="ovTitle">坦克大战</div>
-      <div class="sub" id="ovSub">消灭所有敌军坦克，保卫你的基地<br><span style="color:var(--muted)">方向键 / WASD 移动 &nbsp;·&nbsp; 空格 / J 射击</span></div>
+      <div class="sub" id="ovSub">消灭所有敌军坦克，保卫你的基地<br><span style="color:var(--muted)">方向键 / WASD 移动 &nbsp;·&nbsp; 空格 / J 射击 &nbsp;·&nbsp; E 结束对局</span></div>
       <div class="hint" id="ovHint">按回车开始 · P 暂停</div>
     </div>
   </div>
@@ -176,7 +178,7 @@
     <button id="fire" type="button">🔥<br>开火</button>
   </div>
 
-  <div class="keys">方向键/WASD 移动 · 空格/J 射击 · P 暂停</div>
+  <div class="keys">方向键/WASD 移动 · 空格/J 射击 · P 暂停 · E 结束对局</div>
 </div>
 
 <script>
@@ -277,7 +279,8 @@ let player = null;
 let enemies = [];        // 场上敌人
 let bullets = [];        // 所有子弹
 let particles = [];
-let score = 0, lives = 3, level = 1;
+const MAX_LIVES = 5;     // 玩家生命总数（红心数量）
+let score = 0, lives = MAX_LIVES, level = 1;
 let enemiesTotal = 0, enemiesSpawned = 0, enemiesAlive = 0;
 let state = 'menu';      // menu | playing | paused | over | win
 let spawnTimer = 0;
@@ -351,6 +354,34 @@ function rectBlocked(x, y, w, h) {
   return false;
 }
 
+// 判断敌方坦克向某方向移动是否可行（撞墙或撞到其他敌人则不可行）
+function canEnemyMove(e, dir) {
+  const nx = e.x + DX[dir] * e.speed;
+  const ny = e.y + DY[dir] * e.speed;
+  if (rectBlocked(nx, ny, e.w, e.h)) return false;
+  for (const o of enemies) {
+    if (o === e || !o.alive) continue;
+    if (nx < o.x + o.w && nx + e.w > o.x && ny < o.y + o.h && ny + e.h > o.y) return false;
+  }
+  return true;
+}
+
+// 清除坦克出生点所占的地块，确保出生时不会卡在墙里
+function clearTankSpawn(tank) {
+  const x0 = Math.floor(tank.x / TILE), x1 = Math.floor((tank.x + tank.w - 1) / TILE);
+  const y0 = Math.floor(tank.y / TILE), y1 = Math.floor((tank.y + tank.h - 1) / TILE);
+  for (let ty = y0; ty <= y1; ty++)
+    for (let tx = x0; tx <= x1; tx++)
+      if (tx >= 0 && ty >= 0 && tx < 13 && ty < 13) walls[ty][tx] = EMPTY;
+}
+
+// 返回坦克面朝方向紧邻的地块类型（用于判断射击是否有意义）
+function facingTile(e) {
+  const px = e.x + HALF + DX[e.dir] * (HALF + 1);
+  const py = e.y + HALF + DY[e.dir] * (HALF + 1);
+  return tileAt(Math.floor(px / TILE), Math.floor(py / TILE));
+}
+
 /* ----------------------------- 初始化 ----------------------------- */
 function startLevel(lv) {
   resetMap(lv);
@@ -361,12 +392,14 @@ function startLevel(lv) {
   if (player) {
     player.x = 6 * HALF; player.y = 22 * HALF;
     player.dir = DIR.UP; player.cooldown = 0; player.invuln = 60;
+    player.alive = true;
+    clearTankSpawn(player);
   }
   updateHud();
 }
 
 function newGame() {
-  score = 0; lives = 3; level = 1;
+  score = 0; lives = MAX_LIVES; level = 1;
   player = new Tank(6 * HALF, 22 * HALF, DIR.UP, true);
   startLevel(level);
   setState('playing');
@@ -390,6 +423,8 @@ function startOrAdvance() {
 function respawnPlayer() {
   player.x = 6 * HALF; player.y = 22 * HALF;
   player.dir = DIR.UP; player.invuln = 90; player.cooldown = 0;
+  player.alive = true;
+  clearTankSpawn(player);
 }
 
 /* ----------------------------- 输入 ----------------------------- */
@@ -412,6 +447,7 @@ document.addEventListener('keydown', (e) => {
   }
   if (state !== 'playing') return;
 
+  if (e.code === 'KeyE') { endRound(); return; }
   if (KEYMAP[e.code] !== undefined) keys[KEYMAP[e.code]] = true;
   if (FIRE_KEYS.has(e.code)) keys.fire = true;
 });
@@ -482,25 +518,31 @@ function update() {
     if (e.invuln > 0) e.invuln--;
     e.cooldown = Math.max(0, e.cooldown - 1);
 
-    // 前方受阻则随机转向
-    const aheadX = e.x + DX[e.dir] * e.speed;
-    const aheadY = e.y + DY[e.dir] * e.speed;
-    let blocked = rectBlocked(aheadX, aheadY, e.w, e.h);
-    // 敌人间简单避让：检查前方是否与其他敌人重叠
-    if (!blocked) {
-      for (const o of enemies) {
-        if (o === e || !o.alive) continue;
-        if (Math.abs(aheadX - o.x) < TILE && Math.abs(aheadY - o.y) < TILE) { blocked = true; break; }
+    // 前方受阻时转向可通行方向（优先非来路，必要时掉头），避免撞墙后原地打转
+    if (!canEnemyMove(e, e.dir)) {
+      const prefer = [DIR.UP, DIR.RIGHT, DIR.DOWN, DIR.LEFT]
+        .filter(d => d !== e.dir && d !== (e.dir + 2) % 4 && canEnemyMove(e, d));
+      if (prefer.length > 0) {
+        e.dir = prefer[Math.floor(Math.random() * prefer.length)];
+      } else {
+        const back = (e.dir + 2) % 4;
+        if (canEnemyMove(e, back)) e.dir = back;
       }
+    } else if (Math.random() < 0.008) {
+      // 偶尔随机转向（不掉头），避免一直走直线
+      const prefer = [DIR.UP, DIR.RIGHT, DIR.DOWN, DIR.LEFT]
+        .filter(d => d !== e.dir && d !== (e.dir + 2) % 4 && canEnemyMove(e, d));
+      if (prefer.length > 0) e.dir = prefer[Math.floor(Math.random() * prefer.length)];
     }
-    if (blocked || Math.random() < 0.008) {
-      const dirs = [DIR.UP, DIR.RIGHT, DIR.DOWN, DIR.LEFT].filter(d => d !== e.dir);
-      e.dir = dirs[Math.floor(Math.random() * dirs.length)];
-    } else {
-      e.x = aheadX; e.y = aheadY;
+
+    // 沿当前方向移动（若可通行）
+    if (canEnemyMove(e, e.dir)) {
+      e.x += DX[e.dir] * e.speed;
+      e.y += DY[e.dir] * e.speed;
     }
-    // 射击
-    if (e.cooldown <= 0 && Math.random() < 0.03) fire(e);
+
+    // 射击：不朝钢墙/边界浪费子弹
+    if (e.cooldown <= 0 && Math.random() < 0.03 && facingTile(e) !== STEEL) fire(e);
   }
 
   /* 敌人生成 */
@@ -509,8 +551,9 @@ function update() {
     if (spawnTimer <= 0) {
       if (enemiesAlive < 4) {
         const sp = SPAWN_POINTS[Math.floor(Math.random() * SPAWN_POINTS.length)];
-        // 生成点需空位
-        if (!rectBlocked(sp.x, sp.y, TILE, TILE)) {
+        // 生成点需空位（且不与场上其他敌人重叠）
+        if (!rectBlocked(sp.x, sp.y, TILE, TILE) &&
+            !enemies.some(o => o.alive && sp.x < o.x + o.w && sp.x + TILE > o.x && sp.y < o.y + o.h && sp.y + TILE > o.y)) {
           const type = enemiesSpawned % 3 === 2 ? 2 : enemiesSpawned % 3; // 每三个含一个强力型
           const e = new Tank(sp.x, sp.y, DIR.DOWN, false, type);
           e.invuln = 0;
@@ -604,9 +647,21 @@ function baseDestroyed() {
   showOverlay('基地被毁', '任务失败！得分 ' + score, '按回车重新开始');
 }
 
+// 玩家主动结束当前对局（按 E 键）
+function endRound() {
+  if (state !== 'playing') return;
+  setState('over');
+  showOverlay('对局结束', '你已结束本局，得分 ' + score, '按回车重新开始');
+  sfx.boom();
+}
+
 function updateHud() {
   elScore.textContent = score;
-  elLives.textContent = Math.max(0, lives);
+  let hearts = '';
+  for (let i = 0; i < MAX_LIVES; i++) {
+    hearts += `<span class="heart${i < lives ? ' on' : ''}">♥</span>`;
+  }
+  elLives.innerHTML = hearts;
   elRemaining.textContent = enemiesTotal - enemiesSpawned + enemiesAlive;
   elLevel.textContent = level;
 }
